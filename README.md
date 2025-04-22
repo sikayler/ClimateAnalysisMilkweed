@@ -1,5 +1,5 @@
 # ClimateAnalysisMilkweed
-A species distribution model of Ascleipias syriaca and speciosa in the United States of America using climate data and projection for future based on climate change models.
+A species distribution model of Ascleipias syriaca and speciosa (from iNaturalist) in the United States of America using climate data (from WorldClim) and projection for future based on climate change models.
 
 Link to Annotated Bibliography and project notes: https://docs.google.com/document/d/1EEXL6ebBq5HCnoB9HkluoOjj4xjTCCo2R4pnNthjMo8/edit?pli=1&tab=t.0
 
