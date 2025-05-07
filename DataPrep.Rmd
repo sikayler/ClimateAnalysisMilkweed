@@ -1,0 +1,277 @@
+---
+title: "RevisedPreprocessing"
+author: "Schaler Starks"
+date: "2025-05-04"
+output: html_document
+---
+---
+title: "MilkweedOccurrenceBioclim"
+author: "Schaler Starks"
+date: "2025-04-27"
+output: html_document
+---
+
+```{r Libraries}
+# R Version 4.4.2
+
+# Install if not already
+# install.packages("spocc")
+# install.packages("dplyr")
+#install.packages("geodata") # for climate data processing
+#install.packages("terra") # for climate data processing
+library(ggplot2)
+library(dplyr)
+library(maps)
+
+library(spocc)
+#library(raster) # unecessary if I use terra # raster::getData doesn't work, not part of R anymore
+library(geodata)
+library(terra)
+library(sp) # generate spatial points for syriaca and speciosa occurrances
+library(dismo) # for generating background points
+#library(caret) # split test/train
+
+
+library(leaflet)
+```
+
+
+```{r Load In Occurrence Data}
+setwd("C:\\Users\\these\\Documents\\BIOL361\\ClimAnalysisProj2")
+
+
+syriaca_inat <-occ(query = "Asclepias syriaca", from = "inat", limit = 3000)
+speciosa_inat <- occ(query = "Asclepias speciosa", from = "inat", limit = 3000)
+```
+```{r}
+# Making data frames
+syriaca_df <- occ2df(syriaca_inat)
+speciosa_df <- occ2df(speciosa_inat)
+
+```
+
+```{r}
+# Check a sample of the data
+head(syriaca_inat)
+colnames(syriaca_inat)
+dim(syriaca_inat)
+```
+
+```{r}
+
+```
+
+```{r Visualization from BIOCLIM_example}
+occ <- bind_rows(syriaca_df, speciosa_df)
+
+na_map <- map_data("world", region = c("USA", "Canada", "Mexico"))
+occ$longitude <- as.numeric(occ$longitude)
+occ$latitude <- as.numeric(occ$latitude)
+
+occurrence_plot <- ggplot() +
+  geom_polygon(data = na_map, aes(x = long, y = lat, group = group),
+               fill = "gray90", color = "gray50") +
+  geom_point(data = occ, aes(x = longitude, y = latitude, color = name), size = 2,
+             alpha = 0.3) +
+  scale_color_manual(values = c("Asclepias syriaca" = "orange", 
+                                "Asclepias speciosa" = "lightblue")) +
+  coord_fixed(1.3, xlim = c(-130, -60), ylim = c(20, 55)) +
+  theme_minimal() +
+  labs(title = "Occurrences of Asclepias syriaca and speciosa in North America",
+       color = "name")
+occurrence_plot
+```
+
+```{r }
+occ
+```
+
+```{r Save the Visualization}
+ggsave("occurrence_map.png", plot = occurrence_plot, width = 10, height = 6, dpi = 300)
+```
+
+```{r Dates for CO2 Emmissions Later}
+library(lubridate)
+
+# change to date type
+speciosa_df$date <- ymd(speciosa_df$date)
+syriaca_df$date <- ymd(syriaca_df$date)
+
+# extract the year
+speciosa_df$year <- year(speciosa_df$date)
+syriaca_df$year <- year(syriaca_df$date)
+
+# Combine list of years
+combined_years <- sort(unique(c(speciosa_df$year, syriaca_df$year)))
+
+print(combined_years)
+```
+```{r}
+library(lubridate)
+
+# change to date type
+occ$date <- ymd(occ$date)
+# extract the year
+occ$year <- year(occ$date)
+# Combine list of years
+years <- sort(unique(c(occ$year)))
+
+print(years)
+```
+
+```{r Remove Original iNaturalist to clear space}
+rm(syriaca_inat, speciosa_inat)
+```
+
+## Prep Bioclim Data
+
+```{r Climate Occurrence Data}
+bioclim <- geodata::worldclim_global(var = "bio", res = 2.5, path = "data/")
+
+# to define us bounding box with new documentation
+us_extent <- terra::ext(-125, -65, 25, 50)
+bioclim_us <- terra::crop(bioclim, us_extent)
+
+head(bioclim_us)
+#rm(bioclim)
+```
+
+
+```{r Occurrence Data with Bioclim}
+# Occurrence Data: Extract bioclim for Asclepias syriaca points
+occ %>%
+  na.omit() %>% # this line removes the null values
+  vect(geom = c("longitude", "latitude"), crs = crs(bioclim_us)) %>%
+  extract(bioclim_us, .) %>%
+  mutate(presence = 1)
+
+speciosa_df %>%
+  mutate(
+    longitude = as.numeric(longitude),
+    latitude = as.numeric(latitude)
+  ) %>%
+  na.omit() %>% # this line removes the null values
+  vect(geom = c("longitude", "latitude"), crs = crs(bioclim_us)) %>%
+  extract(bioclim_us, .) %>%
+  mutate(presence = 1)
+
+speciosa_df %>%
+  mutate(
+    longitude = as.numeric(longitude),
+    latitude = as.numeric(latitude)
+  ) %>%
+  na.omit() %>%
+  vect(geom = c("longitude", "latitude"), crs = crs(bioclim_us)) %>% # this line instead of spatial points
+  extract(bioclim_us, .) %>%
+  mutate(presence = 1)
+```
+```{r}
+occ
+```
+
+Researcher's note: Here I choose to generate 16 pseudoabsences for every true presence. Liu et al. (2019) found that for rare species, the number of back-ground points needs to be up to 16 times greater than the number of true presences for model accuracy to reach an asymptote. In addition, pseudo-absence points can’t fall within 4 km of an occurrence
+
+
+```{r Prepping Absence Data}
+# Number of pseudo-absences = 16 × number of true presences
+#n_presence <- nrow(syriaca_df) + nrow(speciosa_df)
+n_presence <- nrow(occ)
+n_pseudo <- n_presence * 16
+```
+
+```{r Sampling More Random Points than Needed}
+set.seed(27)
+
+# Sample background points (oversample ~2x to be safe)
+bg_points <- spatSample(bioclim_us[[1]],
+                        size = n_pseudo * 2,
+                        method = "random",
+                        na.rm = TRUE,
+                        xy = TRUE)
+```
+
+```{r}
+bg_vect <- vect(bg_points, 
+                geom = c("x", "y"), 
+                crs = crs(bioclim_us))
+
+presence_vect <- vect(occ, geom = c("longitude", "latitude"), crs = crs(bioclim_us))
+```
+
+```{r}
+# Split background points into smaller chunks
+chunk_size <- 1000
+n_chunks <- ceiling(nrow(bg_vect) / chunk_size)
+
+# Store minimum distances for each background point
+min_distances <- numeric(nrow(bg_vect))
+
+for (i in 1:n_chunks) {
+  index_start <- (i - 1) * chunk_size + 1
+  index_end <- min(i * chunk_size, nrow(bg_vect))
+  
+  bg_chunk <- bg_vect[idx_start:idx_end, ]
+  
+  # Compute distances 
+  dist_matrix <- terra::distance(bg_chunk, presence_vect)
+  
+  # Get the min dist to any presence point
+  min_distances[idx_start:idx_end] <- apply(dist_matrix, 1, min)
+}
+bg_vect_far <- bg_vect[min_distances > 4000, ]
+bg_vect_final <- bg_vect_far[sample(1:nrow(bg_vect_far),
+                                    n_pseudo, 
+                                    replace = TRUE), ]
+
+```
+
+### CO2 Emmissions Data
+```{r}
+# List all the .nc files
+co2_files <- list.files("C:\\Users\\these\\Documents\\BIOL361\\ClimAnalysisProj2\\RelevantCO2",  
+                        pattern = ".nc$", 
+                        full.names = TRUE)
+
+# Load them into a SpatRaster collection
+co2_stack <- rast(co2_files)
+```
+
+```{r}
+```
+
+
+```{r}
+occ_totalData <- occ |>
+  mutate(presence = 1) %>%
+  bind_rows(
+    extract(bioclim_us, bg_vect_final) %>%
+      dplyr::select(-ID) %>%
+      mutate(presence = 0)
+  )
+```
+
+```{r}
+# Combine presence 'n' pseudoabsence spatial vector
+combined_vect <- vect(occ_totalData, geom = c("longitude", "latitude"), crs = crs(co2_stack))
+
+# Extract CO₂ values
+co2_vals <- extract(co2_stack, combined_vect)
+
+# Remove the ID column added by extract
+co2_vals <- co2_vals[, -1]
+
+# Bind CO₂ values to `occ_totalData`
+occ_totalData <- bind_cols(occ_totalData, co2_vals)
+
+```
+
+
+```{r}
+totalData_clean <- occ_totalData %>%
+  na.omit()
+```
+
+```{r}
+write.csv(totalData_clean, "milkweedData.csv", row.names = FALSE)
+```
+
